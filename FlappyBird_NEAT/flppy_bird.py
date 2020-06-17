@@ -161,7 +161,7 @@ class Base:
         win.blit(self.IMG, (self.x2, self.y))
 
 
-def draw_window(win, bird, pipes, base, score):
+def draw_window(win, birds, pipes, base, score):
     win.blit(BG_IMG, (0, 0))
     for pipe in pipes:
         pipe.draw(win)
@@ -170,18 +170,29 @@ def draw_window(win, bird, pipes, base, score):
     win.blit(text, (MIN_WIDTH - 10 - text.get_width(), 10))
 
     base.draw(win)
-    bird.draw(win)
+    for bird in birds:
+        bird.draw(win)
 
     pygame.display.update()
 
 
-def main():
-    bird = Bird(250, 350)
+def main(genomes, config):
+    nets =[]                    # list of neural nets
+    ge =[]                        # List of genomes
+    birds = []
+
+    for _ , g in genomes:
+        net = neat.nn.FeedForwardNetwork.create(g, config)     # pylint: disable=no-member
+        nets.append(net)
+        birds.append(Bird(230, 350))
+        g.fitness = 0
+        ge.append(g)
+
+
     base = Base(680)
     pipes = [Pipe(700)]
     win = pygame.display.set_mode((MIN_WIDTH, MIN_HEIGHT))
     clock = pygame.time.Clock()
-    add_pipe = False
     score = 0
 
     run = True
@@ -190,36 +201,82 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:   # pylint: disable=no-member
                 run = False
+                pygame.quit()  # pylint: disable=no-member
+                quit()
         # bird.move()
+        pipe_ind = 0
+        if len(birds) > 0:
+            if len(pipes) > 1 and birds[0].x > pipes[0].x + pipes[0].PIPE_TOP.get_width():
+                pipe_ind = 1
+        else:
+            run = False
+            break
+
+        for x, bird in enumerate(birds):
+            bird.move()
+            ge[x].fitness += 0.1            # giving sone reward for surving this far
+
+            output = nets[x].activate((bird.y, abs(bird.y-pipes[pipe_ind].height), abs(bird.y-pipes[pipe_ind].bottom)))
+            if output[0] >= 0.5:
+                bird.jump()
         rem = []
+        add_pipe = False
         for pipe in pipes:
+            for x, bird in enumerate(birds):
+                if pipe.collide(bird):
+                    ge[x].fitness -= 1          # giving a negative reward of -1
+                    birds.pop(x)
+                    nets.pop(x)
+                    ge.pop(x)
+           
+                if not pipe.passed and pipe.x < bird.x:
+                    pipe.passed = True
+                    add_pipe = True
+
+                
             pipe.move()
-            if pipe.collide(bird):
-                pass
+            
             if pipe.x + pipe.PIPE_TOP.get_width() < 0:
                 rem.append(pipe)
 
-            if not pipe.passed and pipe.x < bird.x:
-                pipe.passed = True
-                add_pipe = True
 
         if add_pipe:
             score += 1
+            for g in ge:
+                g.fitness += 5              # giving a positive 5 reward for passing a pipe
             pipes.append(Pipe(600))
-            add_pipe = False
 
         for r in rem:
             pipes.remove(r)
 
-        # check for base collision
-        if bird.y + bird.img.get_height() > 680:
-            pass
+        # check for base collision or bird top collision
+        for x, bird in enumerate(birds):    
+            if bird.y + bird.img.get_height() > 680 or bird.y<0 :
+                birds.pop(x)
+                ge.pop(x)
+                nets.pop(x)
 
         base.move()
-        draw_window(win, bird, pipes, base, score)
-
-    pygame.quit()  # pylint: disable=no-member
-    quit()
+        draw_window(win, birds, pipes, base, score)
 
 
-main()
+
+
+
+
+
+def run(config_path):
+    config = neat.config.Config(neat.DefaultGenome, neat.DefaultReproduction, neat.DefaultSpeciesSet, neat.DefaultStagnation, config_path) # pylint: disable=no-member
+
+    p = neat.Population(config)                         # pylint: disable=no-member
+
+    p.add_reporter(neat.StdOutReporter(True))       # pylint: disable=no-member
+    stats = neat.StatisticsReporter()                           # pylint: disable=no-member
+    p.add_reporter(stats)
+
+    winner = p.run(main, 50)
+
+if __name__ == "__main__":
+    local_dir = os.path.dirname(__file__)
+    config_path = os.path.join(local_dir, "config-feedforward.txt")
+    run(config_path)
